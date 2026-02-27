@@ -21,6 +21,78 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+BOT_STATUS_TYPE = os.getenv("BOT_STATUS_TYPE","playing")
+BOT_STATUS_TEXT = os.getenv("BOT_STATUS_TEXT","iLO Monitor")
+BOT_STATUS_STREAM_URL = os.getenv("BOT_STATUS_STREAM_URL","https://twitch.tv/test")
+
+
+# =========================
+# BOT ACTIVITY STATUS
+# =========================
+
+def get_activity():
+
+    t = BOT_STATUS_TYPE.lower()
+
+
+    # ======================
+    # AUTO MODE
+    # ======================
+
+    if t=="auto":
+
+        s = ilo_status()
+
+        if s is True:
+            text="🟢 Server ONLINE"
+
+        elif s is False:
+            text="🔴 Server OFFLINE"
+
+        else:
+            text="⚪ Server UNKNOWN"
+
+        return discord.Game(name=text)
+
+
+    # ======================
+    # MANUAL MODES
+    # ======================
+
+    if t=="playing":
+        return discord.Game(name=BOT_STATUS_TEXT)
+
+    if t=="listening":
+        return discord.Activity(
+            type=discord.ActivityType.listening,
+            name=BOT_STATUS_TEXT
+        )
+
+    if t=="watching":
+        return discord.Activity(
+            type=discord.ActivityType.watching,
+            name=BOT_STATUS_TEXT
+        )
+
+    if t=="competing":
+        return discord.Activity(
+            type=discord.ActivityType.competing,
+            name=BOT_STATUS_TEXT
+        )
+
+    if t=="streaming":
+        return discord.Streaming(
+            name=BOT_STATUS_TEXT,
+            url=BOT_STATUS_STREAM_URL
+        )
+
+    if t=="custom":
+        return discord.CustomActivity(
+            name=BOT_STATUS_TEXT
+        )
+
+    return discord.Game(name=BOT_STATUS_TEXT)
+
 
 # =========================
 # CORE iLO REQUEST
@@ -66,35 +138,73 @@ def logs_today(xml):
 
     today = datetime.now().strftime("%m/%d/%Y")
 
-    logs=[]
+    today_logs=[]
+    notset_logs=[]
+    all_logs=[]
 
     lines = xml.split("<EVENT")
 
     for line in lines:
 
-        if today in line:
+        date=""
+        desc=""
+        severity=""
 
-            date=""
-            desc=""
-            severity=""
+        if 'LAST_UPDATE="' in line:
+            date=line.split('LAST_UPDATE="')[1].split('"')[0].strip()
 
-            if 'LAST_UPDATE="' in line:
-                date=line.split('LAST_UPDATE="')[1].split('"')[0]
+        if 'DESCRIPTION="' in line:
+            desc=line.split('DESCRIPTION="')[1].split('"')[0]
 
-            if 'DESCRIPTION="' in line:
-                desc=line.split('DESCRIPTION="')[1].split('"')[0]
+        if 'SEVERITY="' in line:
+            severity=line.split('SEVERITY="')[1].split('"')[0]
 
-            if 'SEVERITY="' in line:
-                severity=line.split('SEVERITY="')[1].split('"')[0]
 
-            logs.append(
-                f"🕒 {date} [{severity}]\n{desc}"
-            )
+        entry=f"🕒 {date} [{severity}]\n{desc}"
 
-            if len(logs)>=10:
-                break
 
-    return logs
+        # =====================
+        # TODAY
+        # =====================
+
+        if today in date:
+
+            today_logs.append(entry)
+
+
+        # =====================
+        # NOT SET
+        # =====================
+
+        elif "[NOT SET]" in date:
+
+            notset_logs.append(entry)
+
+
+        # =====================
+        # ALL
+        # =====================
+
+        else:
+
+            all_logs.append(entry)
+
+
+
+    # =====================
+    # PRIORITY
+    # =====================
+
+    if today_logs:
+        return today_logs,"today"
+
+    if notset_logs:
+        return notset_logs,"notset"
+
+    if all_logs:
+        return all_logs,"all"
+
+    return [],"none"
 
 
 def parse_xml(xml):
@@ -117,6 +227,28 @@ def parse_ribcl(xml):
                 return ET.fromstring("<?xml"+p)
             except:
                 continue
+
+    return None
+
+
+def parse_ribcl_value(xml, tag, attr="VALUE"):
+
+    parts = xml.split("<?xml")
+
+    for p in parts:
+
+        try:
+
+            root = ET.fromstring("<?xml"+p)
+
+            node = root.find(f".//{tag}")
+
+            if node is not None:
+
+                return node.get(attr)
+
+        except:
+            continue
 
     return None
 
@@ -158,7 +290,7 @@ def make_embed(title, description="", color=0x2ecc71):
         color=color
     )
 
-    e.set_footer(text="iLO3 Monitor")
+    e.set_footer(text=f"iLO3 monitor by Yuuki0 held by Adila raped by Dim")
 
     return e
 
@@ -289,6 +421,15 @@ def ilo_network():
 """))
 
 
+def ilo_servername():
+
+    return ilo_request(ilo_xml("""
+<SERVER_INFO MODE="read">
+<GET_SERVER_NAME />
+</SERVER_INFO>
+"""))
+
+
 # =========================
 # LIGHT FUNCTIONS
 # =========================
@@ -383,20 +524,11 @@ class Bot(discord.Client):
         commands = [
 
         status,
-        momentary,
-        startup,
-        shutdown,
-        reboot,
-        warmboot,
-        coldboot,
-        forceoff,
-        ilo_reset_cmd,
+        power,
 
+        info_cmd,
         ilo_cmd,
-        health,
-        temp,
-        fan,
-        power_read,
+        health_cmd,
         network,
 
         uidtoggle,
@@ -412,6 +544,27 @@ class Bot(discord.Client):
 
 
 bot = Bot()
+
+
+@bot.event
+async def on_ready():
+
+    # last=None
+
+    while True:
+
+        # s = ilo_status()
+
+        # if s!=last:
+
+        await bot.change_presence(
+            activity=get_activity(),
+            status=discord.Status.online
+        )
+
+            # last=s
+
+        await asyncio.sleep(30)
 
 
 # =========================
@@ -441,12 +594,6 @@ async def status(i:discord.Interaction):
     )
 
     e.add_field(
-        name="Power",
-        value=msg,
-        inline=True
-    )
-
-    e.add_field(
         name="Ping",
         value=latency,
         inline=True
@@ -467,68 +614,89 @@ async def status(i:discord.Interaction):
     await i.followup.send(embed=e)
 
 
-@app_commands.command(name="momentary",description="⚪️ Press power button")
-async def momentary(i:discord.Interaction):
+@app_commands.command(name="power",description="⚡ Power control")
 
-    await i.response.send_message("⚪️ Pressing button")
+@app_commands.describe(action="Power action (default = momentary press)")
 
-    ilo_toggle()
+@app_commands.choices(action=[
 
+    app_commands.Choice(name="Power ON", value="on"),
+    app_commands.Choice(name="Power OFF", value="off"),
+    app_commands.Choice(name="Reboot", value="reboot"),
+    app_commands.Choice(name="Warm Boot", value="warmboot"),
+    app_commands.Choice(name="Cold Boot", value="coldboot"),
+    app_commands.Choice(name="Force OFF", value="forceoff")
 
-@app_commands.command(name="startup",description="🟢 Power ON server")
-async def startup(i:discord.Interaction):
+])
 
-    await i.response.send_message("🟢 Starting server")
+async def power(
+    i:discord.Interaction,
+    action:app_commands.Choice[str] = None
+):
 
-    ilo_on()
-
-
-@app_commands.command(name="shutdown",description="🔴 Power OFF server")
-async def shutdown(i:discord.Interaction):
-
-    await i.response.send_message("🔴 Shutting down")
-
-    ilo_off()
-
-
-@app_commands.command(name="reboot",description="♻ Normal reboot")
-async def reboot(i:discord.Interaction):
-
-    await i.response.send_message("♻ Rebooting")
-
-    ilo_reboot()
+    await i.response.defer()
 
 
-@app_commands.command(name="warmboot",description="♻ Fast reboot")
-async def warmboot(i:discord.Interaction):
+    # =====================
+    # DEFAULT = MOMENTARY
+    # =====================
 
-    await i.response.send_message("♻ Warm boot")
+    if action is None:
 
-    ilo_warmboot()
+        ilo_toggle()
 
+        await i.followup.send(
+            "⚪ Momentary Power Button Pressed"
+        )
 
-@app_commands.command(name="coldboot",description="⚠ Power cycle reboot")
-async def coldboot(i:discord.Interaction):
-
-    await i.response.send_message("⚠ Cold boot")
-
-    ilo_coldboot()
-
-
-@app_commands.command(name="forceoff",description="⛔ Force shutdown")
-async def forceoff(i:discord.Interaction):
-
-    await i.response.send_message("⛔ Force power off")
-
-    ilo_forceoff()
+        return
 
 
-@app_commands.command(name="ilo_reset",description="🔧 Restart iLO only")
-async def ilo_reset_cmd(i:discord.Interaction):
+    act = action.value
 
-    await i.response.send_message("🔧 Restarting iLO")
 
-    ilo_reset()
+    if act=="on":
+
+        ilo_on()
+        msg="🟢 Power ON"
+
+
+    elif act=="off":
+
+        ilo_off()
+        msg="🔴 Power OFF"
+
+
+    elif act=="reboot":
+
+        ilo_reboot()
+        msg="♻ Reboot"
+
+
+    elif act=="warmboot":
+
+        ilo_warmboot()
+        msg="♻ Warm Boot"
+
+
+    elif act=="coldboot":
+
+        ilo_coldboot()
+        msg="⚠ Cold Boot"
+
+
+    elif act=="forceoff":
+
+        ilo_forceoff()
+        msg="⛔ Force OFF"
+
+
+    else:
+
+        msg="Unknown action"
+
+
+    await i.followup.send(msg)
 
 
 # =========================
@@ -536,7 +704,37 @@ async def ilo_reset_cmd(i:discord.Interaction):
 # =========================
 
 @app_commands.command(name="ilo",description="📟 iLO firmware info")
-async def ilo_cmd(i:discord.Interaction):
+
+@app_commands.describe(action="Action (optional)")
+
+@app_commands.choices(action=[
+
+    app_commands.Choice(name="Reset iLO", value="reset")
+
+])
+
+async def ilo_cmd(
+    i:discord.Interaction,
+    action:app_commands.Choice[str] = None
+):
+
+
+    # =====================
+    # RESET MODE
+    # =====================
+
+    if action and action.value=="reset":
+
+        await i.response.send_message("🔧 Restarting iLO")
+
+        ilo_reset()
+
+        return
+
+
+    # =====================
+    # DEFAULT = INFO
+    # =====================
 
     await i.response.defer()
 
@@ -545,6 +743,7 @@ async def ilo_cmd(i:discord.Interaction):
     root=parse_ribcl(xml)
 
     fw=root.find(".//GET_FW_VERSION")
+
 
     e = make_embed("📀 iLO Firmware")
 
@@ -575,148 +774,195 @@ async def ilo_cmd(i:discord.Interaction):
     await i.followup.send(embed=e)
 
 
-@app_commands.command(name="health",description="❤️ Overall Health")
-async def health(i:discord.Interaction):
+@app_commands.command(name="info",description="🖥 Server hostname info")
+async def info_cmd(i:discord.Interaction):
 
     await i.response.defer()
 
-    xml=ilo_health_raw()
+    xml = ilo_servername()
 
-    root=parse_ribcl(xml)
+    hostname = parse_ribcl_value(xml,"SERVER_NAME")
 
-    h=root.find(".//HEALTH_AT_A_GLANCE")
+    if hostname is None:
 
-    e=make_embed("❤️ Hardware Health")
+        await i.followup.send(
+            "⚠ Unable to read server hostname"
+        )
 
-    e.add_field(
-        name="Fans",
-        value=h.find("FANS").get("STATUS"),
-        inline=True
-    )
+        return
 
-    e.add_field(
-        name="Temperature",
-        value=h.find("TEMPERATURE").get("STATUS"),
-        inline=True
-    )
+
+    e = make_embed("🖥 Server Info")
 
     e.add_field(
-        name="Power",
-        value=h.find("POWER_SUPPLIES").get("STATUS"),
-        inline=True
-    )
-
-    await i.followup.send(embed=e)
-
-
-@app_commands.command(name="temp",description="🌡 Temperature sensors")
-async def temp(i:discord.Interaction):
-
-    await i.response.defer()
-
-    xml=ilo_health_raw()
-
-    root=parse_ribcl(xml)
-
-    temps=root.findall(".//TEMP")
-
-    e=make_embed("🌡 Temperature")
-
-    txt=""
-
-    for t in temps:
-
-        txt+=f"**{t.find('LOCATION').get('VALUE')}** → "
-        txt+=f"{t.find('CURRENTREADING').get('VALUE')}°C "
-        txt+=f"({t.find('STATUS').get('VALUE')})\n"
-
-    e.description=txt[:4000]
-
-    await i.followup.send(embed=e)
-
-
-@app_commands.command(name="fan",description="🌀 Fan status")
-async def fan(i:discord.Interaction):
-
-    await i.response.defer()
-
-    xml=ilo_health_raw()
-
-    root=parse_ribcl(xml)
-
-    fans=root.findall(".//FAN")
-
-    e=make_embed("🌀 Fans")
-
-    txt=""
-
-    for f in fans:
-
-        txt+=f"**{f.find('LABEL').get('VALUE')}** → "
-        txt+=f"{f.find('STATUS').get('VALUE')} "
-        txt+=f"({f.find('SPEED').get('VALUE')}%)\n"
-
-    e.description=txt[:4000]
-
-    await i.followup.send(embed=e)
-
-
-@app_commands.command(name="power",description="⚡ Power supplies and VRM")
-async def power_read(i:discord.Interaction):
-
-    await i.response.defer()
-
-    xml=ilo_health_raw()
-
-    root=parse_ribcl(xml)
-
-    supplies=root.findall(".//SUPPLY")
-
-    vrm=root.findall(".//MODULE")
-
-    e=make_embed("⚡ Power System")
-
-    # ----------------
-    # POWER SUPPLY
-    # ----------------
-
-    supply_txt=""
-
-    for s in supplies:
-
-        supply_txt+=f"🔌 {s.find('LABEL').get('VALUE')} → "
-        supply_txt+=f"{s.find('STATUS').get('VALUE')}\n"
-
-    if supply_txt=="":
-        supply_txt="No data"
-
-    e.add_field(
-        name="Power Supplies",
-        value=supply_txt,
-        inline=False
-    )
-
-    # ----------------
-    # VRM
-    # ----------------
-
-    vrm_txt=""
-
-    for v in vrm:
-
-        vrm_txt+=f"⚙ {v.find('LABEL').get('VALUE')} → "
-        vrm_txt+=f"{v.find('STATUS').get('VALUE')}\n"
-
-    if vrm_txt=="":
-        vrm_txt="No data"
-
-    e.add_field(
-        name="VRM Modules",
-        value=vrm_txt,
+        name="Hostname",
+        value=hostname,
         inline=False
     )
 
     await i.followup.send(embed=e)
+
+
+@app_commands.command(name="health",description="❤️ Hardware health info")
+
+@app_commands.describe(type="Health data type  (default = summary)")
+
+@app_commands.choices(type=[
+
+    app_commands.Choice(name="Temperature",value="temp"),
+    app_commands.Choice(name="Fans",value="fan"),
+    app_commands.Choice(name="Power Supplies",value="power")
+
+])
+
+async def health_cmd(
+    i:discord.Interaction,
+    type:app_commands.Choice[str] = None
+):
+
+    await i.response.defer()
+
+    xml = ilo_health_raw()
+
+    root = parse_ribcl(xml)
+
+
+    # =====================
+    # DEFAULT = SUMMARY
+    # =====================
+
+    if type is None:
+
+        h = root.find(".//HEALTH_AT_A_GLANCE")
+
+        e = make_embed("❤️ Hardware Health")
+
+        e.add_field(
+            name="Fans",
+            value=h.find("FANS").get("STATUS"),
+            inline=True
+        )
+
+        e.add_field(
+            name="Temperature",
+            value=h.find("TEMPERATURE").get("STATUS"),
+            inline=True
+        )
+
+        e.add_field(
+            name="Power",
+            value=h.find("POWER_SUPPLIES").get("STATUS"),
+            inline=True
+        )
+
+        await i.followup.send(embed=e)
+
+        return
+
+
+    t = type.value
+
+
+    # =====================
+    # TEMP
+    # =====================
+
+    if t=="temp":
+
+        temps=root.findall(".//TEMP")
+
+        e=make_embed("🌡 Temperature")
+
+        txt=""
+
+        for temp in temps:
+
+            txt+=f"**{temp.find('LOCATION').get('VALUE')}** → "
+            txt+=f"{temp.find('CURRENTREADING').get('VALUE')}°C "
+            txt+=f"({temp.find('STATUS').get('VALUE')})\n"
+
+        e.description=txt[:4000]
+
+        await i.followup.send(embed=e)
+
+        return
+
+
+    # =====================
+    # FAN
+    # =====================
+
+    if t=="fan":
+
+        fans=root.findall(".//FAN")
+
+        e=make_embed("🌀 Fans")
+
+        txt=""
+
+        for f in fans:
+
+            txt+=f"**{f.find('LABEL').get('VALUE')}** → "
+            txt+=f"{f.find('STATUS').get('VALUE')} "
+            txt+=f"({f.find('SPEED').get('VALUE')}%)\n"
+
+        e.description=txt[:4000]
+
+        await i.followup.send(embed=e)
+
+        return
+
+
+    # =====================
+    # POWER SUPPLY + VRM
+    # =====================
+
+    if t=="power":
+
+        supplies=root.findall(".//SUPPLY")
+
+        vrm=root.findall(".//MODULE")
+
+        e=make_embed("⚡ Power System")
+
+
+        supply_txt=""
+
+        for s in supplies:
+
+            supply_txt+=f"🔌 {s.find('LABEL').get('VALUE')} → "
+            supply_txt+=f"{s.find('STATUS').get('VALUE')}\n"
+
+        if supply_txt=="":
+            supply_txt="No data"
+
+
+        e.add_field(
+            name="Power Supplies",
+            value=supply_txt,
+            inline=False
+        )
+
+
+        vrm_txt=""
+
+        for v in vrm:
+
+            vrm_txt+=f"⚙ {v.find('LABEL').get('VALUE')} → "
+            vrm_txt+=f"{v.find('STATUS').get('VALUE')}\n"
+
+        if vrm_txt=="":
+            vrm_txt="No data"
+
+
+        e.add_field(
+            name="VRM Modules",
+            value=vrm_txt,
+            inline=False
+        )
+
+
+        await i.followup.send(embed=e)
 
 
 @app_commands.command(name="network",description="🌐 Network settings")
@@ -775,54 +1021,151 @@ async def network(i:discord.Interaction):
 # LIGHT COMMANDS
 # =========================
 
-@app_commands.command(name="uid",description="💡 Toggle UID LED")
-async def uidtoggle(i:discord.Interaction):
+@app_commands.command(name="uid",description="💡 UID LED control")
+
+@app_commands.describe(action="UID Action (default = toggle)")
+
+@app_commands.choices(action=[
+
+    app_commands.Choice(name="Status", value="status"),
+    app_commands.Choice(name="ON", value="on"),
+    app_commands.Choice(name="OFF", value="off")
+
+])
+
+async def uidtoggle(
+    i:discord.Interaction,
+    action:app_commands.Choice[str] = None
+):
 
     await i.response.defer()
 
-    initial = uid_status()
 
-    if initial is None:
-        await i.followup.send("⚠ Unable to read UID status")
+    # =====================
+    # DEFAULT = TOGGLE
+    # =====================
+
+    if action is None:
+
+        initial = uid_status()
+
+        if initial is None:
+            await i.followup.send("⚠ Unable to read UID status")
+            return
+
+        uid_set(not initial)
+
+        for _ in range(10):
+
+            await asyncio.sleep(1)
+
+            new_state = uid_status()
+
+            if new_state != initial:
+                break
+
+        if new_state is None:
+            await i.followup.send("⚠ UID toggle uncertain")
+            return
+
+        emoji = "🔵" if new_state else "⚫"
+        state = "ON" if new_state else "OFF"
+
+        await i.followup.send(
+            f"{emoji} UID LED → {state}"
+        )
+
         return
 
-    uid_set(not initial)
 
-    for _ in range(10):
+    act = action.value
 
-        await asyncio.sleep(1)
 
-        new_state = uid_status()
+    # =====================
+    # STATUS
+    # =====================
 
-        if new_state != initial:
-            break
+    if act=="status":
 
-    if new_state is None:
-        await i.followup.send("⚠ UID toggle uncertain")
+        s = uid_status()
+
+        if s is None:
+            await i.followup.send("⚠ Unable to read UID status")
+            return
+
+        emoji = "🔵" if s else "⚫"
+        state = "ON" if s else "OFF"
+
+        await i.followup.send(
+            f"{emoji} UID LED → {state}"
+        )
+
         return
 
-    emoji = "🔵" if new_state else "⚫"
-    state = "ON" if new_state else "OFF"
 
-    await i.followup.send(
-        f"{emoji} UID LED → {state}"
-    )
+    # =====================
+    # FORCE ON
+    # =====================
+
+    if act=="on":
+
+        uid_set(True)
+
+        await asyncio.sleep(2)
+
+        await i.followup.send(
+            "🔵 UID LED → ON"
+        )
+
+        return
+
+
+    # =====================
+    # FORCE OFF
+    # =====================
+
+    if act=="off":
+
+        uid_set(False)
+
+        await asyncio.sleep(2)
+
+        await i.followup.send(
+            "⚫ UID LED → OFF"
+        )
+
+        return
 
 
 # =========================
 # LOG COMMANDS
 # =========================
 
-@app_commands.command(name="eventlog",description="📜 Server event log (today)")
+@app_commands.command(name="logs",description="📜 Server event log")
 async def eventlog(i:discord.Interaction):
 
     await i.response.defer()
 
     xml=ilo_eventlog()
 
-    logs=logs_today(xml)
+    logs,mode=logs_today(xml)
 
-    e=make_embed("📜 Event Log (Today)")
+
+    if mode=="today":
+        title="📜 Event Log (Today)"
+
+    elif mode=="notset":
+        title="📜 Event Log (Clock Error)"
+
+    elif mode=="all":
+        title="📜 Event Log (All)"
+
+    else:
+        title="📜 Event Log"
+
+
+    e=make_embed(title)
+
 
     if logs:
 
@@ -831,14 +1174,15 @@ async def eventlog(i:discord.Interaction):
         e.description=text
 
         e.add_field(
-            name="Entries Today",
+            name="Entries",
             value=str(len(logs)),
             inline=True
         )
 
     else:
 
-        e.description="🟢 No events today"
+        e.description="No logs found"
+
 
     await i.followup.send(embed=e)
 
